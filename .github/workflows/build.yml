@@ -1,0 +1,110 @@
+name: Build Android APK - Sewatama SFC
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+jobs:
+  build-android-apk:
+    name: Unzip AI Studio Project & Build Android APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 1. Checkout Repository Code
+        uses: actions/checkout@v4
+
+      - name: 2. Auto-Unzip File ZIP dari AI Studio (Jika Ada File .zip)
+        run: |
+          shopt -s nullglob
+          ZIP_FILES=(*.zip)
+          if [ ${#ZIP_FILES[@]} -gt 0 ]; then
+            echo "Ditemukan file ZIP: ${ZIP_FILES[0]}"
+            mkdir -p _unzipped_temp
+            unzip -q -o "${ZIP_FILES[0]}" -d _unzipped_temp
+
+            if [ -d "_unzipped_temp/public" ]; then
+              cp -rf _unzipped_temp/* .
+            else
+              SUBDIR=$(find _unzipped_temp -mindepth 1 -maxdepth 1 -type d | head -n 1)
+              if [ -n "$SUBDIR" ] && [ -d "$SUBDIR/public" ]; then
+                cp -rf "$SUBDIR"/* .
+              else
+                cp -rf _unzipped_temp/* .
+              fi
+            fi
+            rm -rf _unzipped_temp
+            echo "Berhasil mengekstrak seluruh file dari ${ZIP_FILES[0]}!"
+          else
+            echo "Tidak ditemukan file .zip, menggunakan folder public/ yang sudah ada di repo."
+          fi
+
+          if [ ! -f "public/index.html" ]; then
+            echo "ERROR: File public/index.html tidak ditemukan! Pastikan file ZIP dari AI Studio sudah di-upload ke repository."
+            exit 1
+          fi
+
+      - name: 3. Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: 4. Siapkan package.json & capacitor.config.json Bersih untuk Build APK
+        run: |
+          cat << 'EOF' > package.json
+          {
+            "name": "sewatama-sfc",
+            "version": "1.0.0",
+            "description": "Sewatama SFC - PLTD Daily Specific Fuel Consumption",
+            "main": "public/index.html",
+            "dependencies": {
+              "@capacitor/android": "5.7.8",
+              "@capacitor/cli": "5.7.8",
+              "@capacitor/core": "5.7.8",
+              "firebase": "10.13.1"
+            }
+          }
+          EOF
+
+          cat << 'EOF' > capacitor.config.json
+          {
+            "appId": "com.sewatama.sfc",
+            "appName": "Sewatama SFC",
+            "webDir": "public",
+            "bundledWebRuntime": false,
+            "server": {
+              "androidScheme": "https"
+            }
+          }
+          EOF
+
+      - name: 5. Install Capacitor Dependencies
+        run: npm install --no-audit --no-fund
+
+      - name: 6. Add & Sync Capacitor Android Platform
+        run: |
+          rm -rf android
+          npx cap add android
+          npx cap sync android
+
+      - name: 7. Setup Java JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: 8. Compile APK dengan Gradle assembleDebug
+        working-directory: ./android
+        run: |
+          chmod +x ./gradlew
+          ./gradlew assembleDebug --no-daemon
+
+      - name: 9. Upload File APK Siap Install (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sewatama-SFC-debug-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 30
